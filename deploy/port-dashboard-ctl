@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# Root-only helper for guarded stop / restart / kill.
+# Invoked by the port-dashboard API via: sudo -n /usr/local/sbin/port-dashboard-ctl ...
+set -euo pipefail
+
+UNIT_RE='^[A-Za-z0-9@_.\-]+\.service$'
+
+PROTECTED_UNITS=(
+  port-dashboard.service
+  nginx.service
+  ssh.service
+  sshd.service
+  dbus.service
+  dbus-broker.service
+  NetworkManager.service
+  systemd-logind.service
+  systemd-journald.service
+  systemd-resolved.service
+  systemd-networkd.service
+  systemd-udevd.service
+  systemd-timesyncd.service
+)
+
+die() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+
+is_protected_unit() {
+  local unit="$1"
+  local p
+  if [[ "${unit}" == systemd-* ]]; then
+    return 0
+  fi
+  # Protect user session slices: user@1000.service, user@0.service, …
+  if [[ "${unit}" == user@*.service ]]; then
+    return 0
+  fi
+  for p in "${PROTECTED_UNITS[@]}"; do
+    if [[ "${unit}" == "${p}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+validate_unit() {
+  local unit="$1"
+  [[ -n "${unit}" ]] || die "unit required"
+  [[ "${unit}" =~ ${UNIT_RE} ]] || die "invalid unit name"
+  if is_protected_unit "${unit}"; then
+    die "unit is protected"
+  fi
+}
+
+validate_pid() {
+  local pid="$1"
+  [[ "${pid}" =~ ^[0-9]+$ ]] || die "invalid pid"
+  (( pid >= 2 )) || die "pid not allowed"
+  # Never kill PID 1 or this helper's process tree roots unexpectedly
+  if [[ ! -d "/proc/${pid}" ]]; then
+    die "process not found"
+  fi
+  # Refuse killing our own shell / sudo parent chain targets that are protected by name
+  local comm
+  comm="$(tr '\0' ' ' <"/proc/${pid}/comm" 2>/dev/null | awk '{print $1}' || true)"
+  case "${comm}" in
+    systemd|init|sshd|ssh|nginx|port-dashboard|uvicorn|dbus-daemon|NetworkManager)
+      die "process is protected"
+      ;;
+  esac
+}
+
+cmd_stop() {
+  local unit="${1:-}"
+  validate_unit "${unit}"
+  exec /bin/systemctl stop "${unit}"
+}
+
+cmd_start() {
+  local unit="${1:-}"
+  validate_unit "${unit}"
+  exec /bin/systemctl start "${unit}"
+}
+
+cmd_restart() {
+  local unit="${1:-}"
+  validate_unit "${unit}"
+  exec /bin/systemctl restart "${unit}"
+}
+
+cmd_kill() {
+  local pid="${1:-}"
+  validate_pid "${pid}"
+
+  # SIGTERM then escalate
+  if kill -0 "${pid}" 2>/dev/null; then
+    kill -TERM "${pid}" 2>/dev/null || die "failed to signal process"
+  else
+    die "process not found"
+  fi
+
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      exit 0
+    fi
+    sleep 0.2
+  done
+
+  if kill -0 "${pid}" 2>/dev/null; then
+    kill -KILL "${pid}" 2>/dev/null || die "failed to force-kill process"
+  fi
+  exit 0
+}
+
+usage() {
+  die "usage: $0 {stop|start|restart} <unit.service> | kill <pid>"
+}
+
+main() {
+  local action="${1:-}"
+  shift || true
+  case "${action}" in
+    stop) cmd_stop "$@" ;;
+    start) cmd_start "$@" ;;
+    restart) cmd_restart "$@" ;;
+    kill) cmd_kill "$@" ;;
+    *) usage ;;
+  esac
+}
+
+main "$@"

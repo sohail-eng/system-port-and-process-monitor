@@ -1,0 +1,2346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark light" />
+  <title>System Port &amp; Process Monitor</title>
+  <script>
+    (function () {
+      try {
+        var pref = localStorage.getItem("port-dashboard-theme-v1") || "system";
+        var dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        var resolved = pref === "system" ? (dark ? "dark" : "light") : pref;
+        document.documentElement.setAttribute("data-theme", resolved);
+        document.documentElement.setAttribute("data-theme-pref", pref);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "dark");
+        document.documentElement.setAttribute("data-theme-pref", "system");
+      }
+    })();
+  </script>
+  <style>
+    :root,
+    html[data-theme="dark"] {
+      --bg: #0b1220;
+      --bg-elevated: #121a2b;
+      --bg-soft: #182338;
+      --border: #243049;
+      --text: #e8eef9;
+      --muted: #93a0b8;
+      --accent: #3d9cf0;
+      --accent-dim: rgba(61, 156, 240, 0.15);
+      --ok: #3ecf8e;
+      --warn: #e6b84d;
+      --danger: #f07178;
+      --danger-bg: rgba(240, 113, 120, 0.14);
+      --danger-bg-hover: rgba(240, 113, 120, 0.24);
+      --danger-border: rgba(240, 113, 120, 0.55);
+      --danger-text: #ffc9cd;
+      --banner-bg: rgba(240, 113, 120, 0.12);
+      --banner-text: #ffc9cd;
+      --banner-warn-bg: rgba(230, 184, 77, 0.12);
+      --banner-warn-text: #ffe3a1;
+      --fav-row: rgba(240, 113, 120, 0.08);
+      --heart: #f07178;
+      --heart-muted: #5a657a;
+      --tcp: #5b9fd4;
+      --udp: #c792ea;
+      --radius: 12px;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+      --font: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+      --table-head: #152038;
+      --log-bg: #070b14;
+      --log-text: #d7e3f4;
+      --chip-hover: rgba(255, 255, 255, 0.03);
+    }
+
+    html[data-theme="light"] {
+      --bg: #f4f7fb;
+      --bg-elevated: #ffffff;
+      --bg-soft: #eef3f9;
+      --border: #d5dee8;
+      --text: #152033;
+      --muted: #5b6b80;
+      --accent: #1f7ad6;
+      --accent-dim: rgba(31, 122, 214, 0.12);
+      --ok: #1f9d63;
+      --warn: #c4881a;
+      --danger: #b42332;
+      --danger-bg: #fdecec;
+      --danger-bg-hover: #f9d5d7;
+      --danger-border: #e8a0a6;
+      --danger-text: #9f1239;
+      --banner-bg: #fdecec;
+      --banner-text: #9f1239;
+      --banner-warn-bg: #fff6e0;
+      --banner-warn-text: #8a5a00;
+      --fav-row: rgba(180, 35, 50, 0.06);
+      --heart: #d64550;
+      --heart-muted: #8a97a8;
+      --tcp: #2b7bb8;
+      --udp: #7a4db3;
+      --shadow: 0 10px 28px rgba(21, 32, 51, 0.08);
+      --table-head: #e8eef6;
+      --log-bg: #0f1724;
+      --log-text: #d7e3f4;
+      --chip-hover: rgba(21, 32, 51, 0.04);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      font-family: var(--font);
+      color: var(--text);
+      /* Flat background so Ports / systemd / Docker / PM2 match exactly */
+      background: var(--bg);
+      line-height: 1.45;
+    }
+
+    .page {
+      width: min(1280px, calc(100% - 2rem));
+      margin: 0 auto;
+      padding: 1.5rem 0 2.5rem;
+    }
+
+    header.app-header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 1.5rem;
+    }
+
+    .brand h1 {
+      margin: 0 0 0.35rem;
+      font-size: clamp(1.35rem, 2.4vw, 1.85rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .brand p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .header-meta {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 0.45rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+    }
+    .dot.ok { background: var(--ok); box-shadow: 0 0 8px rgba(62, 207, 142, 0.55); }
+    .dot.err { background: var(--danger); box-shadow: 0 0 8px rgba(240, 113, 120, 0.55); }
+    .dot.loading { background: var(--warn); animation: pulse 1s ease-in-out infinite; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 0.45; }
+      50% { opacity: 1; }
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.85rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .card {
+      background: linear-gradient(180deg, var(--bg-elevated), var(--bg-soft));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.1rem;
+      box-shadow: var(--shadow);
+    }
+    .card .label {
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.4rem;
+    }
+    .card .value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.03em;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 1rem;
+      padding: 0.85rem;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .search-wrap {
+      position: relative;
+      flex: 1 1 240px;
+      min-width: 180px;
+    }
+    .search-wrap svg {
+      position: absolute;
+      left: 0.85rem;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      color: var(--muted);
+      pointer-events: none;
+    }
+    .search-wrap input {
+      width: 100%;
+      padding: 0.7rem 0.9rem 0.7rem 2.4rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+      outline: none;
+    }
+    .search-wrap input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+
+    .filters {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .filters[hidden] { display: none !important; }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.45rem 0.75rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--muted);
+      font-size: 0.85rem;
+      cursor: pointer;
+      user-select: none;
+    }
+    .chip input { accent-color: var(--accent); margin: 0; }
+    .chip.active {
+      color: var(--text);
+      border-color: rgba(61, 156, 240, 0.45);
+      background: var(--accent-dim);
+    }
+
+    button.btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.65rem 0.95rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg-elevated);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+    }
+    button.btn:hover:not(:disabled) {
+      border-color: rgba(61, 156, 240, 0.5);
+      background: var(--bg-soft);
+    }
+    button.btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    button.btn.primary {
+      background: linear-gradient(180deg, #3d9cf0, #2f7fc4);
+      border-color: transparent;
+      color: #fff;
+      font-weight: 600;
+    }
+    button.btn.primary:hover:not(:disabled) {
+      filter: brightness(1.05);
+    }
+    button.btn svg { width: 16px; height: 16px; }
+
+    .banner {
+      display: none;
+      margin-bottom: 1rem;
+      padding: 0.85rem 1rem;
+      border-radius: 10px;
+      border: 1px solid var(--danger-border);
+      background: var(--banner-bg);
+      color: var(--banner-text);
+      font-size: 0.92rem;
+    }
+    .banner.visible { display: block; }
+    .banner.warn {
+      border-color: rgba(196, 136, 26, 0.35);
+      background: var(--banner-warn-bg);
+      color: var(--banner-warn-text);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-elevated);
+      box-shadow: var(--shadow);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 1020px;
+      font-size: 0.9rem;
+    }
+    thead th {
+      position: sticky;
+      top: 0;
+      text-align: left;
+      padding: 0.85rem 0.9rem;
+      background: var(--table-head);
+      color: var(--muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    thead th.col-fav,
+    tbody td.col-fav {
+      width: 2.5rem;
+      padding-left: 0.65rem;
+      padding-right: 0.35rem;
+      text-align: center;
+    }
+    tbody td {
+      padding: 0.75rem 0.9rem;
+      border-bottom: 1px solid rgba(36, 48, 73, 0.75);
+      vertical-align: top;
+    }
+    tbody tr:hover td { background: rgba(61, 156, 240, 0.05); }
+    tbody tr.fav-row td { background: var(--fav-row); }
+    tbody tr:last-child td { border-bottom: none; }
+
+    button.heart-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 2rem;
+      height: 2rem;
+      padding: 0;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--heart-muted);
+      cursor: pointer;
+      line-height: 1;
+    }
+    button.heart-btn:hover {
+      background: var(--danger-bg);
+      color: var(--heart);
+    }
+    button.heart-btn.active {
+      color: var(--heart);
+    }
+    button.heart-btn svg {
+      width: 18px;
+      height: 18px;
+      display: block;
+    }
+
+    .view-chrome {
+      margin-bottom: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--bg-elevated);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .tabs {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0;
+      margin: 0;
+      padding: 0;
+      border: none;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      border-bottom: 1px solid var(--border);
+    }
+    button.tab {
+      appearance: none;
+      -webkit-appearance: none;
+      border: none;
+      border-right: 1px solid var(--border);
+      border-radius: 0;
+      background: var(--bg-elevated);
+      color: var(--muted);
+      font: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 0.85rem 0.5rem;
+      cursor: pointer;
+      text-align: center;
+      width: 100%;
+      box-shadow: none;
+    }
+    button.tab:last-child { border-right: none; }
+    button.tab:hover {
+      color: var(--text);
+      background: var(--bg-soft);
+    }
+    button.tab.active {
+      color: var(--text);
+      background: var(--bg-soft);
+      box-shadow: inset 0 -2px 0 var(--accent);
+    }
+    .view-chrome .toolbar {
+      margin: 0;
+      border: none;
+      border-radius: 0;
+      box-shadow: none;
+      background: var(--bg-elevated);
+    }
+
+    .theme-switch {
+      display: inline-flex;
+      gap: 0.25rem;
+      padding: 0.2rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg);
+    }
+    .theme-switch button {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.3rem 0.55rem;
+      border-radius: 999px;
+      cursor: pointer;
+    }
+    .theme-switch button.active {
+      background: var(--accent-dim);
+      color: var(--text);
+    }
+
+    .panel[hidden] { display: none !important; }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      min-width: 9rem;
+    }
+    button.btn.danger {
+      background: var(--danger-bg);
+      border-color: var(--danger-border);
+      color: var(--danger-text);
+      font-weight: 600;
+    }
+    button.btn.danger:hover:not(:disabled) {
+      background: var(--danger-bg-hover);
+      border-color: var(--danger);
+      color: var(--danger-text);
+    }
+    button.btn.primary.small {
+      background: linear-gradient(180deg, #3d9cf0, #2f7fc4);
+      border-color: transparent;
+      color: #fff;
+    }
+    button.btn.small {
+      padding: 0.35rem 0.55rem;
+      font-size: 0.78rem;
+      border-radius: 8px;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(4, 8, 16, 0.72);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      z-index: 50;
+    }
+    .modal-backdrop[hidden] { display: none !important; }
+    .modal {
+      width: min(440px, 100%);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 1.15rem 1.2rem 1.2rem;
+    }
+    .modal h2 {
+      margin: 0 0 0.5rem;
+      font-size: 1.1rem;
+    }
+    .modal p {
+      margin: 0 0 0.75rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .modal .confirm-target {
+      display: block;
+      margin: 0.35rem 0 0.85rem;
+      padding: 0.55rem 0.7rem;
+      border-radius: 8px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 0.86rem;
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+    .modal label {
+      display: block;
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    .modal input {
+      width: 100%;
+      padding: 0.65rem 0.75rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+      font-family: var(--mono);
+      margin-bottom: 0.9rem;
+      outline: none;
+    }
+    .modal input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+    }
+    .banner.ok {
+      background: rgba(62, 207, 142, 0.1);
+      color: #b8f5d4;
+    }
+
+    .log-modal {
+      width: min(960px, 100%);
+      max-height: min(85vh, 900px);
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 1rem 1.1rem 1.1rem;
+    }
+    .log-modal h2 {
+      margin: 0 0 0.35rem;
+      font-size: 1.05rem;
+    }
+    .log-meta {
+      color: var(--muted);
+      font-size: 0.82rem;
+      margin-bottom: 0.65rem;
+      font-family: var(--mono);
+      overflow-wrap: anywhere;
+    }
+    .log-view {
+      flex: 1 1 auto;
+      min-height: 280px;
+      max-height: 60vh;
+      overflow: auto;
+      background: var(--log-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.75rem 0.85rem;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      color: var(--log-text);
+    }
+    .log-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 0.75rem;
+    }
+    .log-toolbar .left {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+    .log-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .log-dot.live { background: var(--ok); box-shadow: 0 0 8px rgba(62,207,142,0.5); }
+    .log-dot.err { background: var(--danger); }
+
+    .mono { font-family: var(--mono); font-size: 0.86rem; }
+    .muted { color: var(--muted); }
+    .path { max-width: 220px; overflow-wrap: anywhere; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .badge.tcp {
+      color: #b9dcff;
+      background: rgba(91, 159, 212, 0.18);
+      border: 1px solid rgba(91, 159, 212, 0.35);
+    }
+    .badge.udp {
+      color: #e5c7ff;
+      background: rgba(199, 146, 234, 0.16);
+      border: 1px solid rgba(199, 146, 234, 0.35);
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.15rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      text-transform: lowercase;
+    }
+    .status-pill::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .status-pill.active::before { background: var(--ok); }
+    .status-pill.inactive::before,
+    .status-pill.failed::before { background: var(--danger); }
+    .status-pill.activating::before,
+    .status-pill.deactivating::before { background: var(--warn); }
+
+    .empty {
+      text-align: center;
+      padding: 2.5rem 1rem;
+      color: var(--muted);
+    }
+
+    .system-bar {
+      margin-top: 1rem;
+      color: var(--muted);
+      font-size: 0.82rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+    }
+
+    footer {
+      margin-top: 1.75rem;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    @media (max-width: 900px) {
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .header-meta { align-items: flex-start; }
+    }
+    @media (max-width: 560px) {
+      .page { width: min(100% - 1.25rem, 1280px); padding-top: 1rem; }
+      .cards { grid-template-columns: 1fr 1fr; gap: 0.65rem; }
+      .card .value { font-size: 1.4rem; }
+      .toolbar { padding: 0.75rem; }
+      button.tab { font-size: 0.78rem; padding: 0.7rem 0.25rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="app-header">
+      <div class="brand">
+        <h1>System Port &amp; Process Monitor</h1>
+        <p>Live listening TCP/UDP sockets, processes, and systemd services</p>
+      </div>
+      <div class="header-meta">
+        <div class="theme-switch" role="group" aria-label="Theme">
+          <button type="button" data-theme-choice="light" title="Light theme">Light</button>
+          <button type="button" data-theme-choice="system" title="Follow system theme">System</button>
+          <button type="button" data-theme-choice="dark" title="Dark theme">Dark</button>
+        </div>
+        <div class="status-row">
+          <span id="statusDot" class="dot" aria-hidden="true"></span>
+          <span id="statusText">Ready</span>
+        </div>
+        <div>Last updated: <span id="lastUpdated">—</span></div>
+      </div>
+    </header>
+
+    <section class="cards" aria-label="Summary">
+      <article class="card">
+        <div class="label">Listening sockets</div>
+        <div class="value" id="statSockets">—</div>
+      </article>
+      <article class="card">
+        <div class="label">Unique ports</div>
+        <div class="value" id="statPorts">—</div>
+      </article>
+      <article class="card">
+        <div class="label">Identified processes</div>
+        <div class="value" id="statProcs">—</div>
+      </article>
+      <article class="card">
+        <div class="label">TCP / UDP</div>
+        <div class="value"><span id="statTcp">—</span> <span class="muted" style="font-size:1rem">/</span> <span id="statUdp">—</span></div>
+      </article>
+    </section>
+
+    <div id="errorBanner" class="banner" role="alert"></div>
+
+    <div class="view-chrome">
+      <div class="tabs" role="tablist" aria-label="Views">
+        <button type="button" class="tab active" id="tabPorts" role="tab" aria-selected="true" data-tab="ports">Ports</button>
+        <button type="button" class="tab" id="tabServices" role="tab" aria-selected="false" data-tab="systemd">systemd</button>
+        <button type="button" class="tab" id="tabDocker" role="tab" aria-selected="false" data-tab="docker">Docker</button>
+        <button type="button" class="tab" id="tabPm2" role="tab" aria-selected="false" data-tab="pm2">PM2</button>
+      </div>
+
+      <div class="toolbar">
+        <div class="search-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="11" cy="11" r="7"></circle>
+            <path d="M20 20l-3.5-3.5"></path>
+          </svg>
+          <input
+            id="searchInput"
+            type="search"
+            placeholder="Search port, protocol, address, process, PID, path, service…"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+        <div class="filters" id="protocolFilters">
+          <label class="chip active" id="chipTcp">
+            <input type="checkbox" id="filterTcp" checked />
+            TCP
+          </label>
+          <label class="chip active" id="chipUdp">
+            <input type="checkbox" id="filterUdp" checked />
+            UDP
+          </label>
+        </div>
+        <div class="filters" id="systemdExtras" hidden>
+          <div class="search-wrap" style="flex: 1 1 220px; min-width: 180px;">
+            <input
+              id="trackServiceInput"
+              type="text"
+              placeholder="Track unit (e.g. postgresql@16-main.service)"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </div>
+          <button type="button" class="btn" id="trackServiceBtn" title="Keep this unit on the systemd list">Track</button>
+        </div>
+        <button type="button" class="btn" id="clearBtn" title="Clear search and filters">Clear</button>
+        <button type="button" class="btn primary" id="refreshBtn" title="Refresh data">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-2.6-6.2"></path>
+            <path d="M21 3v6h-6"></path>
+          </svg>
+          Refresh
+        </button>
+      </div>
+    </div>
+
+    <div class="panel" id="panelPorts" role="tabpanel">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-fav" title="Favorites (saved in this browser)">♥</th>
+              <th>Port</th>
+              <th>Protocol</th>
+              <th>Listening address</th>
+              <th>State</th>
+              <th>Process</th>
+              <th>PID</th>
+              <th>Executable</th>
+              <th>Service</th>
+              <th>Service status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="portsBody">
+            <tr><td colspan="11" class="empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel" id="panelServices" role="tabpanel" hidden>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Unit</th>
+              <th>Status</th>
+              <th>Related ports</th>
+              <th>PIDs</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="servicesBody">
+            <tr><td colspan="5" class="empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel" id="panelDocker" role="tabpanel" hidden>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>ID</th>
+              <th>Image</th>
+              <th>State</th>
+              <th>Status</th>
+              <th>Ports</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="dockerBody">
+            <tr><td colspan="7" class="empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel" id="panelPm2" role="tabpanel" hidden>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>ID</th>
+              <th>PID</th>
+              <th>Status</th>
+              <th>Mode</th>
+              <th>Restarts</th>
+              <th>CPU / Mem</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="pm2Body">
+            <tr><td colspan="8" class="empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="system-bar" id="systemBar" hidden>
+      <span>Host: <strong id="sysHost" class="mono">—</strong></span>
+      <span>Uptime: <strong id="sysUptime">—</strong></span>
+      <span>Load: <strong id="sysLoad" class="mono">—</strong></span>
+      <span>Memory available: <strong id="sysMem">—</strong></span>
+    </div>
+
+    <footer>
+      Hearts and known services are saved in this browser. Stopped units stay on the Services tab with Start. Stop/Start/Restart/Kill require typed confirmation. Protected units cannot be changed.
+    </footer>
+  </div>
+
+  <div class="modal-backdrop" id="confirmModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <h2 id="confirmTitle">Confirm action</h2>
+      <p id="confirmMessage">Type the value below to confirm.</p>
+      <span class="confirm-target" id="confirmExpected"></span>
+      <label for="confirmInput" id="confirmLabel">Type to confirm</label>
+      <input id="confirmInput" type="text" autocomplete="off" spellcheck="false" />
+      <div class="modal-actions">
+        <button type="button" class="btn" id="confirmCancel">Cancel</button>
+        <button type="button" class="btn danger" id="confirmOk" disabled>Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="logsModal" hidden>
+    <div class="log-modal" role="dialog" aria-modal="true" aria-labelledby="logsTitle">
+      <h2 id="logsTitle">Logs</h2>
+      <div class="log-meta" id="logsMeta">—</div>
+      <div class="log-view" id="logsView" aria-live="polite"></div>
+      <div class="log-toolbar">
+        <div class="left">
+          <span class="log-dot" id="logsDot" aria-hidden="true"></span>
+          <span id="logsState">Idle</span>
+          <label><input type="checkbox" id="logsAutoScroll" checked /> Auto-scroll</label>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="logsClear">Clear</button>
+          <button type="button" class="btn" id="logsClose">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var FAV_STORAGE_KEY = "port-dashboard-favorites-v1";
+      var KNOWN_SERVICES_KEY = "port-dashboard-known-services-v1";
+      var UNIT_RE = /^[A-Za-z0-9@_.-]+\.service$/;
+      var PROTECTED_UNITS = {
+        "port-dashboard.service": true,
+        "port-dashboard-ctl.service": true,
+        "nginx.service": true,
+        "ssh.service": true,
+        "sshd.service": true,
+        "dbus.service": true,
+        "dbus-broker.service": true,
+        "NetworkManager.service": true,
+        "systemd-logind.service": true,
+        "systemd-journald.service": true,
+        "systemd-resolved.service": true,
+        "systemd-networkd.service": true,
+        "systemd-udevd.service": true,
+        "systemd-timesyncd.service": true,
+      };
+
+      var state = {
+        ports: [],
+        summary: null,
+        loading: false,
+        error: null,
+        favorites: {},
+        knownServices: {},
+        serviceStatus: {},
+        catalogServices: {},
+        docker: [],
+        dockerError: null,
+        pm2: [],
+        pm2Error: null,
+        pm2User: null,
+        tab: "ports",
+        pendingAction: null,
+        actionBusy: false,
+        logSocket: null,
+      };
+
+      function loadFavorites() {
+        try {
+          var raw = localStorage.getItem(FAV_STORAGE_KEY);
+          if (!raw) return {};
+          var parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+          return parsed;
+        } catch (e) {
+          return {};
+        }
+      }
+
+      function saveFavorites() {
+        try {
+          localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(state.favorites));
+        } catch (e) {
+          /* quota / private mode */
+        }
+      }
+
+      /** Stable key across PID changes so favorites survive restarts. */
+      function favoriteKey(row) {
+        return [
+          row.protocol || "",
+          row.port == null ? "" : String(row.port),
+          row.address || "",
+          row.process_name || "",
+        ].join("|");
+      }
+
+      function isFavorite(row) {
+        return !!state.favorites[favoriteKey(row)];
+      }
+
+      function toggleFavorite(row) {
+        var key = favoriteKey(row);
+        if (state.favorites[key]) {
+          delete state.favorites[key];
+        } else {
+          state.favorites[key] = true;
+        }
+        saveFavorites();
+        renderActive();
+      }
+
+      function loadKnownServices() {
+        try {
+          var raw = localStorage.getItem(KNOWN_SERVICES_KEY);
+          if (!raw) return {};
+          var parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+          return parsed;
+        } catch (e) {
+          return {};
+        }
+      }
+
+      function saveKnownServices() {
+        try {
+          localStorage.setItem(KNOWN_SERVICES_KEY, JSON.stringify(state.knownServices));
+        } catch (e) {
+          /* ignore */
+        }
+      }
+
+      function rememberService(unit) {
+        if (!unit || !UNIT_RE.test(unit)) return;
+        if (!state.knownServices[unit]) {
+          state.knownServices[unit] = true;
+          saveKnownServices();
+        }
+      }
+
+      function rememberServicesFromPorts() {
+        state.ports.forEach(function (row) {
+          if (hasUnit(row)) rememberService(row.service);
+        });
+      }
+
+      state.favorites = loadFavorites();
+      state.knownServices = loadKnownServices();
+
+      var els = {
+        statusDot: document.getElementById("statusDot"),
+        statusText: document.getElementById("statusText"),
+        lastUpdated: document.getElementById("lastUpdated"),
+        errorBanner: document.getElementById("errorBanner"),
+        searchInput: document.getElementById("searchInput"),
+        filterTcp: document.getElementById("filterTcp"),
+        filterUdp: document.getElementById("filterUdp"),
+        chipTcp: document.getElementById("chipTcp"),
+        chipUdp: document.getElementById("chipUdp"),
+        clearBtn: document.getElementById("clearBtn"),
+        refreshBtn: document.getElementById("refreshBtn"),
+        portsBody: document.getElementById("portsBody"),
+        servicesBody: document.getElementById("servicesBody"),
+        dockerBody: document.getElementById("dockerBody"),
+        pm2Body: document.getElementById("pm2Body"),
+        panelPorts: document.getElementById("panelPorts"),
+        panelServices: document.getElementById("panelServices"),
+        panelDocker: document.getElementById("panelDocker"),
+        panelPm2: document.getElementById("panelPm2"),
+        tabPorts: document.getElementById("tabPorts"),
+        tabServices: document.getElementById("tabServices"),
+        tabDocker: document.getElementById("tabDocker"),
+        tabPm2: document.getElementById("tabPm2"),
+        protocolFilters: document.getElementById("protocolFilters"),
+        systemdExtras: document.getElementById("systemdExtras"),
+        confirmModal: document.getElementById("confirmModal"),
+        confirmTitle: document.getElementById("confirmTitle"),
+        confirmMessage: document.getElementById("confirmMessage"),
+        confirmExpected: document.getElementById("confirmExpected"),
+        confirmLabel: document.getElementById("confirmLabel"),
+        confirmInput: document.getElementById("confirmInput"),
+        confirmCancel: document.getElementById("confirmCancel"),
+        confirmOk: document.getElementById("confirmOk"),
+        logsModal: document.getElementById("logsModal"),
+        logsTitle: document.getElementById("logsTitle"),
+        logsMeta: document.getElementById("logsMeta"),
+        logsView: document.getElementById("logsView"),
+        logsDot: document.getElementById("logsDot"),
+        logsState: document.getElementById("logsState"),
+        logsAutoScroll: document.getElementById("logsAutoScroll"),
+        logsClear: document.getElementById("logsClear"),
+        logsClose: document.getElementById("logsClose"),
+        trackServiceInput: document.getElementById("trackServiceInput"),
+        trackServiceBtn: document.getElementById("trackServiceBtn"),
+        statSockets: document.getElementById("statSockets"),
+        statPorts: document.getElementById("statPorts"),
+        statProcs: document.getElementById("statProcs"),
+        statTcp: document.getElementById("statTcp"),
+        statUdp: document.getElementById("statUdp"),
+        systemBar: document.getElementById("systemBar"),
+        sysHost: document.getElementById("sysHost"),
+        sysUptime: document.getElementById("sysUptime"),
+        sysLoad: document.getElementById("sysLoad"),
+        sysMem: document.getElementById("sysMem"),
+      };
+
+      function hasUnit(row) {
+        return !!(row && row.service && row.service !== "unavailable" && UNIT_RE.test(row.service));
+      }
+
+      function isSessionUnit(unit) {
+        return !!(unit && unit.indexOf("user@") === 0 && unit.slice(-8) === ".service");
+      }
+
+      function isProtectedUnit(unit) {
+        // Whole-unit stop/start/restart blocked (includes user session)
+        if (!unit) return true;
+        if (PROTECTED_UNITS[unit]) return true;
+        if (unit.indexOf("systemd-") === 0) return true;
+        if (isSessionUnit(unit)) return true;
+        return false;
+      }
+
+      function isHardProtectedUnit(unit) {
+        // Even PID kill is refused for these (not user@ session)
+        if (!unit) return false;
+        if (PROTECTED_UNITS[unit]) return true;
+        if (unit.indexOf("systemd-") === 0) return true;
+        return false;
+      }
+
+      function canKillRow(row) {
+        if (!row || !row.pid) return false;
+        if (isHardProtectedUnit(row.service)) return false;
+        return true;
+      }
+
+      function setTab(tab) {
+        var allowed = { ports: 1, systemd: 1, services: 1, docker: 1, pm2: 1 };
+        state.tab = allowed[tab] ? (tab === "services" ? "systemd" : tab) : "ports";
+
+        var tabs = [
+          ["ports", els.tabPorts, els.panelPorts],
+          ["systemd", els.tabServices, els.panelServices],
+          ["docker", els.tabDocker, els.panelDocker],
+          ["pm2", els.tabPm2, els.panelPm2],
+        ];
+        tabs.forEach(function (item) {
+          var active = state.tab === item[0];
+          item[1].classList.toggle("active", active);
+          item[1].setAttribute("aria-selected", active ? "true" : "false");
+          item[2].hidden = !active;
+        });
+
+        els.protocolFilters.hidden = state.tab !== "ports";
+        els.systemdExtras.hidden = state.tab !== "systemd";
+        var placeholders = {
+          ports: "Search port, protocol, address, process, PID, path, service…",
+          systemd: "Search systemd unit, status, port, PID…",
+          docker: "Search container name, image, ports, status…",
+          pm2: "Search PM2 name, id, status, script…",
+        };
+        els.searchInput.placeholder = placeholders[state.tab] || placeholders.ports;
+        renderActive();
+      }
+
+      var THEME_KEY = "port-dashboard-theme-v1";
+
+      function resolveTheme(pref) {
+        if (pref === "light" || pref === "dark") return pref;
+        return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+
+      function loadThemePref() {
+        try {
+          var pref = localStorage.getItem(THEME_KEY) || "system";
+          if (pref !== "light" && pref !== "dark" && pref !== "system") return "system";
+          return pref;
+        } catch (e) {
+          return "system";
+        }
+      }
+
+      function applyTheme(pref) {
+        var resolved = resolveTheme(pref);
+        document.documentElement.setAttribute("data-theme", resolved);
+        document.documentElement.setAttribute("data-theme-pref", pref);
+        try {
+          localStorage.setItem(THEME_KEY, pref);
+        } catch (e) { /* ignore */ }
+        document.querySelectorAll("[data-theme-choice]").forEach(function (btn) {
+          btn.classList.toggle("active", btn.getAttribute("data-theme-choice") === pref);
+        });
+      }
+
+      function initThemeControls() {
+        var pref = loadThemePref();
+        applyTheme(pref);
+        document.querySelectorAll("[data-theme-choice]").forEach(function (btn) {
+          btn.addEventListener("click", function () {
+            applyTheme(btn.getAttribute("data-theme-choice") || "system");
+          });
+        });
+        try {
+          window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function () {
+            if (loadThemePref() === "system") applyTheme("system");
+          });
+        } catch (e) { /* older browsers */ }
+      }
+
+      function renderActive() {
+        if (state.tab === "systemd") renderServicesTable();
+        else if (state.tab === "docker") renderDockerTable();
+        else if (state.tab === "pm2") renderPm2Table();
+        else renderTable();
+      }
+
+      function closeModal() {
+        state.pendingAction = null;
+        els.confirmModal.hidden = true;
+        els.confirmInput.value = "";
+        els.confirmOk.disabled = true;
+        els.confirmOk.textContent = "Confirm";
+      }
+
+      function setLogsState(kind, text) {
+        els.logsDot.className = "log-dot" + (kind ? " " + kind : "");
+        els.logsState.textContent = text;
+      }
+
+      function appendLogLine(line) {
+        var atBottom =
+          els.logsView.scrollTop + els.logsView.clientHeight >=
+          els.logsView.scrollHeight - 24;
+        els.logsView.textContent += line + "\n";
+        if (els.logsAutoScroll.checked || atBottom) {
+          els.logsView.scrollTop = els.logsView.scrollHeight;
+        }
+      }
+
+      function closeLogs() {
+        if (state.logSocket) {
+          try { state.logSocket.close(); } catch (e) { /* ignore */ }
+          state.logSocket = null;
+        }
+        els.logsModal.hidden = true;
+        setLogsState("", "Idle");
+      }
+
+      function openLogs(runtime, target) {
+        closeLogs();
+        els.logsTitle.textContent = "Logs — " + runtime;
+        els.logsMeta.textContent = target;
+        els.logsView.textContent = "";
+        els.logsModal.hidden = false;
+        setLogsState("", "Connecting…");
+
+        var proto = window.location.protocol === "https:" ? "wss://" : "ws://";
+        var url =
+          proto +
+          window.location.host +
+          "/api/logs/ws?runtime=" +
+          encodeURIComponent(runtime) +
+          "&target=" +
+          encodeURIComponent(target);
+        var ws;
+        try {
+          ws = new WebSocket(url);
+        } catch (e) {
+          setLogsState("err", "Failed to open WebSocket");
+          appendLogLine(String(e && e.message ? e.message : e));
+          return;
+        }
+        state.logSocket = ws;
+        ws.onopen = function () {
+          setLogsState("live", "Live");
+        };
+        ws.onmessage = function (ev) {
+          appendLogLine(String(ev.data || ""));
+        };
+        ws.onerror = function () {
+          setLogsState("err", "Stream error");
+        };
+        ws.onclose = function () {
+          if (state.logSocket === ws) state.logSocket = null;
+          setLogsState("", "Disconnected");
+        };
+      }
+
+      function makeLogsBtn(runtime, target) {
+        return makeActionBtn("Logs", "", function () {
+          openLogs(runtime, target);
+        });
+      }
+
+      function openConfirm(action) {
+        state.pendingAction = action;
+        els.confirmTitle.textContent = action.title;
+        els.confirmMessage.textContent = action.message;
+        els.confirmExpected.textContent = action.expected;
+        els.confirmLabel.textContent = action.label;
+        els.confirmInput.value = "";
+        els.confirmOk.disabled = true;
+        els.confirmOk.textContent = action.confirmLabel || "Confirm";
+        els.confirmModal.hidden = false;
+        els.confirmInput.focus();
+      }
+
+      function syncConfirmEnabled() {
+        var action = state.pendingAction;
+        if (!action) {
+          els.confirmOk.disabled = true;
+          return;
+        }
+        els.confirmOk.disabled =
+          state.actionBusy || els.confirmInput.value !== action.expected;
+      }
+
+      function makeActionBtn(label, className, onClick) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn small" + (className ? " " + className : "");
+        btn.textContent = label;
+        btn.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          onClick();
+        });
+        return btn;
+      }
+
+      function appendServiceActions(container, unit, status) {
+        if (!unit) {
+          var mutedEmpty = document.createElement("span");
+          mutedEmpty.className = "muted";
+          mutedEmpty.textContent = "—";
+          container.appendChild(mutedEmpty);
+          return;
+        }
+        // Logs are read-only even for many protected units (not user session)
+        if (!isSessionUnit(unit)) {
+          container.appendChild(makeLogsBtn("systemd", unit));
+        }
+        if (isProtectedUnit(unit)) {
+          if (isSessionUnit(unit) || isHardProtectedUnit(unit)) {
+            var muted = document.createElement("span");
+            muted.className = "muted";
+            muted.textContent = "protected";
+            container.appendChild(muted);
+          }
+          return;
+        }
+        var active = (status || "").toLowerCase() === "active";
+        if (!active) {
+          container.appendChild(
+            makeActionBtn("Start", "primary", function () {
+              openConfirm({
+                kind: "start",
+                title: "Start service",
+                message: "This will run systemctl start. Type the unit name to confirm.",
+                label: "Type unit name",
+                expected: unit,
+                confirmLabel: "Start",
+                unit: unit,
+              });
+            })
+          );
+        }
+        if (active) {
+          container.appendChild(
+            makeActionBtn("Stop", "danger", function () {
+              openConfirm({
+                kind: "stop",
+                title: "Stop service",
+                message: "This will run systemctl stop. Type the unit name to confirm.",
+                label: "Type unit name",
+                expected: unit,
+                confirmLabel: "Stop",
+                unit: unit,
+              });
+            })
+          );
+          container.appendChild(
+            makeActionBtn("Restart", "", function () {
+              openConfirm({
+                kind: "restart",
+                title: "Restart service",
+                message: "This will run systemctl restart. Type the unit name to confirm.",
+                label: "Type unit name",
+                expected: unit,
+                confirmLabel: "Restart",
+                unit: unit,
+              });
+            })
+          );
+        }
+      }
+
+      function appendKillAction(container, row) {
+        if (!canKillRow(row)) {
+          var muted = document.createElement("span");
+          muted.className = "muted";
+          muted.textContent = isHardProtectedUnit(row && row.service) ? "protected" : "—";
+          container.appendChild(muted);
+          return;
+        }
+        container.appendChild(
+          makeActionBtn("Kill", "danger", function () {
+            openConfirm({
+              kind: "kill",
+              title: "Kill process",
+              message:
+                "Send SIGTERM (then SIGKILL if needed) to PID " +
+                row.pid +
+                " (" +
+                displayValue(row.process_name) +
+                "). Frees a stuck port without stopping your user session. Type the PID to confirm.",
+              label: "Type PID",
+              expected: String(row.pid),
+              confirmLabel: "Kill",
+              pid: row.pid,
+              force: false,
+            });
+          })
+        );
+        container.appendChild(
+          makeActionBtn("Force kill", "danger", function () {
+            openConfirm({
+              kind: "kill",
+              title: "Force kill process",
+              message:
+                "Immediately SIGKILL PID " +
+                row.pid +
+                " (" +
+                displayValue(row.process_name) +
+                ") on port " +
+                displayValue(row.port) +
+                ". Use when the process is stuck after Ctrl+Z / hang. Type the PID to confirm.",
+              label: "Type PID",
+              expected: String(row.pid),
+              confirmLabel: "Force kill",
+              pid: row.pid,
+              force: true,
+            });
+          })
+        );
+      }
+
+      function buildServices() {
+        var map = {};
+
+        function ensure(unit, status) {
+          if (!UNIT_RE.test(unit)) return null;
+          if (!map[unit]) {
+            map[unit] = {
+              unit: unit,
+              status: status || "unavailable",
+              ports: {},
+              pids: {},
+            };
+          } else if (status && status !== "unavailable") {
+            map[unit].status = status;
+          }
+          return map[unit];
+        }
+
+        Object.keys(state.catalogServices).forEach(function (unit) {
+          ensure(unit, state.catalogServices[unit]);
+        });
+
+        Object.keys(state.knownServices).forEach(function (unit) {
+          ensure(unit, state.serviceStatus[unit] || state.catalogServices[unit] || "unavailable");
+        });
+
+        state.ports.forEach(function (row) {
+          if (!hasUnit(row)) return;
+          var unit = row.service;
+          var entry = ensure(unit, row.service_status || "unavailable");
+          if (!entry) return;
+          if (state.serviceStatus[unit]) entry.status = state.serviceStatus[unit];
+          if (state.catalogServices[unit]) entry.status = state.catalogServices[unit];
+          if (row.port != null) entry.ports[row.protocol + "/" + row.port] = true;
+          if (row.pid != null) entry.pids[String(row.pid)] = true;
+        });
+
+        return Object.keys(map)
+          .sort()
+          .map(function (k) {
+            var s = map[k];
+            return {
+              unit: s.unit,
+              status: s.status,
+              ports: Object.keys(s.ports).sort(),
+              pids: Object.keys(s.pids)
+                .map(function (x) { return Number(x); })
+                .sort(function (a, b) { return a - b; }),
+            };
+          });
+      }
+
+      function filteredServices() {
+        var q = (els.searchInput.value || "").trim().toLowerCase();
+        return buildServices().filter(function (svc) {
+          if (!q) return true;
+          var hay = [svc.unit, svc.status]
+            .concat(svc.ports)
+            .concat(svc.pids)
+            .join(" ")
+            .toLowerCase();
+          return hay.indexOf(q) !== -1;
+        });
+      }
+
+      function renderServicesTable() {
+        var rows = filteredServices();
+        els.servicesBody.textContent = "";
+        if (!rows.length) {
+          var tr = document.createElement("tr");
+          var td = document.createElement("td");
+          td.colSpan = 5;
+          td.className = "empty";
+          if (state.loading && !state.ports.length && !Object.keys(state.knownServices).length) {
+            td.textContent = "Loading…";
+          } else if (state.error && !state.ports.length && !Object.keys(state.knownServices).length) {
+            td.textContent = "Unable to load services.";
+          } else {
+            td.textContent = "No systemd units match your search. Stopped units stay listed here.";
+          }
+          tr.appendChild(td);
+          els.servicesBody.appendChild(tr);
+          return;
+        }
+        rows.forEach(function (svc) {
+          var tr = document.createElement("tr");
+
+          var nameTd = document.createElement("td");
+          nameTd.className = "mono";
+          nameTd.textContent = svc.unit;
+          tr.appendChild(nameTd);
+
+          var statusTd = document.createElement("td");
+          var pill = document.createElement("span");
+          var cls = statusClass(svc.status);
+          pill.className = "status-pill" + (cls ? " " + cls : "");
+          pill.textContent = displayValue(svc.status);
+          statusTd.appendChild(pill);
+          tr.appendChild(statusTd);
+
+          var portsTd = document.createElement("td");
+          portsTd.className = "mono";
+          portsTd.textContent = svc.ports.length ? svc.ports.join(", ") : "—";
+          tr.appendChild(portsTd);
+
+          var pidsTd = document.createElement("td");
+          pidsTd.className = "mono";
+          pidsTd.textContent = svc.pids.length ? svc.pids.join(", ") : "—";
+          tr.appendChild(pidsTd);
+
+          var actTd = document.createElement("td");
+          var actions = document.createElement("div");
+          actions.className = "actions";
+          appendServiceActions(actions, svc.unit, svc.status);
+          actTd.appendChild(actions);
+          tr.appendChild(actTd);
+
+          els.servicesBody.appendChild(tr);
+        });
+      }
+
+      function filteredDocker() {
+        var q = (els.searchInput.value || "").trim().toLowerCase();
+        return (state.docker || []).filter(function (c) {
+          if (!q) return true;
+          var hay = [c.name, c.id, c.image, c.state, c.status, c.ports]
+            .map(function (x) { return x == null ? "" : String(x).toLowerCase(); })
+            .join(" ");
+          return hay.indexOf(q) !== -1;
+        });
+      }
+
+      function appendDockerActions(container, row) {
+        var ref = row.name || row.id;
+        if (!ref) {
+          var muted = document.createElement("span");
+          muted.className = "muted";
+          muted.textContent = "—";
+          container.appendChild(muted);
+          return;
+        }
+        container.appendChild(makeLogsBtn("docker", ref));
+        var running = String(row.state || "").toLowerCase() === "running";
+        if (!running) {
+          container.appendChild(
+            makeActionBtn("Start", "primary", function () {
+              openConfirm({
+                kind: "docker",
+                action: "start",
+                title: "Start container",
+                message: "docker start. Type the container name/id to confirm.",
+                label: "Type name or id",
+                expected: ref,
+                confirmLabel: "Start",
+                target: ref,
+              });
+            })
+          );
+        } else {
+          container.appendChild(
+            makeActionBtn("Stop", "danger", function () {
+              openConfirm({
+                kind: "docker",
+                action: "stop",
+                title: "Stop container",
+                message: "docker stop. Type the container name/id to confirm.",
+                label: "Type name or id",
+                expected: ref,
+                confirmLabel: "Stop",
+                target: ref,
+              });
+            })
+          );
+          container.appendChild(
+            makeActionBtn("Restart", "", function () {
+              openConfirm({
+                kind: "docker",
+                action: "restart",
+                title: "Restart container",
+                message: "docker restart. Type the container name/id to confirm.",
+                label: "Type name or id",
+                expected: ref,
+                confirmLabel: "Restart",
+                target: ref,
+              });
+            })
+          );
+        }
+      }
+
+      function renderDockerTable() {
+        var rows = filteredDocker();
+        els.dockerBody.textContent = "";
+        if (!rows.length) {
+          var tr = document.createElement("tr");
+          var td = document.createElement("td");
+          td.colSpan = 7;
+          td.className = "empty";
+          if (state.loading) td.textContent = "Loading…";
+          else if (state.dockerError) td.textContent = state.dockerError;
+          else td.textContent = "No Docker containers found (daemon may be stopped).";
+          tr.appendChild(td);
+          els.dockerBody.appendChild(tr);
+          return;
+        }
+        rows.forEach(function (c) {
+          var tr = document.createElement("tr");
+          [
+            { text: displayValue(c.name), className: "mono" },
+            { text: displayValue(c.id), className: "mono" },
+            { text: displayValue(c.image), className: "mono path" },
+            { text: displayValue(c.state) },
+            { text: displayValue(c.status) },
+            { text: displayValue(c.ports), className: "mono path" },
+          ].forEach(function (cell) {
+            var td = document.createElement("td");
+            td.textContent = cell.text;
+            if (cell.className) td.className = cell.className;
+            tr.appendChild(td);
+          });
+          var actTd = document.createElement("td");
+          var actions = document.createElement("div");
+          actions.className = "actions";
+          appendDockerActions(actions, c);
+          actTd.appendChild(actions);
+          tr.appendChild(actTd);
+          els.dockerBody.appendChild(tr);
+        });
+      }
+
+      function filteredPm2() {
+        var q = (els.searchInput.value || "").trim().toLowerCase();
+        return (state.pm2 || []).filter(function (p) {
+          if (!q) return true;
+          var hay = [p.name, p.id, p.pid, p.status, p.mode, p.script, p.cwd]
+            .map(function (x) { return x == null ? "" : String(x).toLowerCase(); })
+            .join(" ");
+          return hay.indexOf(q) !== -1;
+        });
+      }
+
+      function appendPm2Actions(container, row) {
+        var ref = row.name != null && row.name !== "" ? String(row.name) : String(row.id);
+        if (!ref || ref === "undefined" || ref === "null") {
+          var muted = document.createElement("span");
+          muted.className = "muted";
+          muted.textContent = "—";
+          container.appendChild(muted);
+          return;
+        }
+        container.appendChild(makeLogsBtn("pm2", ref));
+        var online = String(row.status || "").toLowerCase() === "online";
+        if (!online) {
+          container.appendChild(
+            makeActionBtn("Start", "primary", function () {
+              openConfirm({
+                kind: "pm2",
+                action: "start",
+                title: "Start PM2 app",
+                message: "pm2 start. Type the app name/id to confirm.",
+                label: "Type name or id",
+                expected: ref,
+                confirmLabel: "Start",
+                target: ref,
+              });
+            })
+          );
+        } else {
+          container.appendChild(
+            makeActionBtn("Stop", "danger", function () {
+              openConfirm({
+                kind: "pm2",
+                action: "stop",
+                title: "Stop PM2 app",
+                message: "pm2 stop. Type the app name/id to confirm.",
+                label: "Type name or id",
+                expected: ref,
+                confirmLabel: "Stop",
+                target: ref,
+              });
+            })
+          );
+          container.appendChild(
+            makeActionBtn("Restart", "", function () {
+              openConfirm({
+                kind: "pm2",
+                action: "restart",
+                title: "Restart PM2 app",
+                message: "pm2 restart. Type the app name/id to confirm.",
+                label: "Type name or id",
+                expected: ref,
+                confirmLabel: "Restart",
+                target: ref,
+              });
+            })
+          );
+        }
+        container.appendChild(
+          makeActionBtn("Delete", "danger", function () {
+            openConfirm({
+              kind: "pm2",
+              action: "delete",
+              title: "Delete PM2 app",
+              message: "pm2 delete (removes from process list). Type the app name/id to confirm.",
+              label: "Type name or id",
+              expected: ref,
+              confirmLabel: "Delete",
+              target: ref,
+            });
+          })
+        );
+      }
+
+      function formatPm2Mem(bytes) {
+        if (bytes == null || !isFinite(bytes)) return "—";
+        var mb = Number(bytes) / (1024 * 1024);
+        return mb >= 1 ? mb.toFixed(1) + " MiB" : Math.round(Number(bytes) / 1024) + " KiB";
+      }
+
+      function renderPm2Table() {
+        var rows = filteredPm2();
+        els.pm2Body.textContent = "";
+        if (!rows.length) {
+          var tr = document.createElement("tr");
+          var td = document.createElement("td");
+          td.colSpan = 8;
+          td.className = "empty";
+          if (state.loading) td.textContent = "Loading…";
+          else if (state.pm2Error) td.textContent = state.pm2Error;
+          else {
+            td.textContent = state.pm2User
+              ? "No PM2 processes for user " + state.pm2User + "."
+              : "No PM2 processes found.";
+          }
+          tr.appendChild(td);
+          els.pm2Body.appendChild(tr);
+          return;
+        }
+        rows.forEach(function (p) {
+          var tr = document.createElement("tr");
+          var cpuMem =
+            (p.cpu != null ? String(p.cpu) + "%" : "—") +
+            " / " +
+            formatPm2Mem(p.memory);
+          [
+            { text: displayValue(p.name), className: "mono" },
+            { text: displayValue(p.id), className: "mono" },
+            { text: displayValue(p.pid), className: "mono" },
+            { text: displayValue(p.status) },
+            { text: displayValue(p.mode) },
+            { text: displayValue(p.restarts), className: "mono" },
+            { text: cpuMem, className: "mono" },
+          ].forEach(function (cell) {
+            var td = document.createElement("td");
+            td.textContent = cell.text;
+            if (cell.className) td.className = cell.className;
+            tr.appendChild(td);
+          });
+          var actTd = document.createElement("td");
+          var actions = document.createElement("div");
+          actions.className = "actions";
+          appendPm2Actions(actions, p);
+          actTd.appendChild(actions);
+          tr.appendChild(actTd);
+          els.pm2Body.appendChild(tr);
+        });
+      }
+
+      function setStatus(kind, text) {
+        els.statusDot.className = "dot" + (kind ? " " + kind : "");
+        els.statusText.textContent = text;
+      }
+
+      function showError(message, isWarn) {
+        if (!message) {
+          els.errorBanner.className = "banner";
+          els.errorBanner.textContent = "";
+          return;
+        }
+        els.errorBanner.className = "banner visible" + (isWarn ? " warn" : "");
+        els.errorBanner.textContent = message;
+      }
+
+      function showOk(message) {
+        els.errorBanner.className = "banner visible ok";
+        els.errorBanner.textContent = message;
+      }
+
+      function formatTs(iso) {
+        try {
+          return new Date(iso).toLocaleString();
+        } catch (e) {
+          return iso || "—";
+        }
+      }
+
+      function formatUptime(seconds) {
+        if (seconds == null || !isFinite(seconds)) return "—";
+        var s = Math.floor(seconds);
+        var d = Math.floor(s / 86400);
+        var h = Math.floor((s % 86400) / 3600);
+        var m = Math.floor((s % 3600) / 60);
+        var parts = [];
+        if (d) parts.push(d + "d");
+        if (h || d) parts.push(h + "h");
+        parts.push(m + "m");
+        return parts.join(" ");
+      }
+
+      function formatMem(kb) {
+        if (kb == null) return "—";
+        var gb = kb / (1024 * 1024);
+        if (gb >= 1) return gb.toFixed(1) + " GiB";
+        return (kb / 1024).toFixed(0) + " MiB";
+      }
+
+      function displayValue(v) {
+        if (v === null || v === undefined || v === "" || v === "unavailable") return "—";
+        return String(v);
+      }
+
+      function matchesQuery(row, q) {
+        if (!q) return true;
+        var hay = [
+          row.port,
+          row.protocol,
+          row.address,
+          row.state,
+          row.process_name,
+          row.pid,
+          row.executable,
+          row.service,
+          row.service_status,
+        ]
+          .map(function (x) { return x == null ? "" : String(x).toLowerCase(); })
+          .join(" ");
+        return hay.indexOf(q) !== -1;
+      }
+
+      function filteredRows() {
+        var q = (els.searchInput.value || "").trim().toLowerCase();
+        var tcp = els.filterTcp.checked;
+        var udp = els.filterUdp.checked;
+        var rows = state.ports.filter(function (row) {
+          if (row.protocol === "tcp" && !tcp) return false;
+          if (row.protocol === "udp" && !udp) return false;
+          return matchesQuery(row, q);
+        });
+        rows.sort(function (a, b) {
+          var fa = isFavorite(a) ? 0 : 1;
+          var fb = isFavorite(b) ? 0 : 1;
+          if (fa !== fb) return fa - fb;
+          if (a.protocol !== b.protocol) return a.protocol < b.protocol ? -1 : 1;
+          if (a.port !== b.port) return (a.port || 0) - (b.port || 0);
+          var aa = String(a.address || "");
+          var ba = String(b.address || "");
+          if (aa !== ba) return aa < ba ? -1 : 1;
+          return 0;
+        });
+        return rows;
+      }
+
+      function statusClass(status) {
+        var s = (status || "").toLowerCase();
+        if (s === "active") return "active";
+        if (s === "inactive" || s === "failed") return s;
+        if (s === "activating" || s === "deactivating") return s;
+        return "";
+      }
+
+      function renderSummary(summary) {
+        if (!summary) {
+          els.statSockets.textContent = "—";
+          els.statPorts.textContent = "—";
+          els.statProcs.textContent = "—";
+          els.statTcp.textContent = "—";
+          els.statUdp.textContent = "—";
+          return;
+        }
+        els.statSockets.textContent = String(summary.total_listening_sockets);
+        els.statPorts.textContent = String(summary.unique_ports);
+        els.statProcs.textContent = String(summary.identified_processes);
+        els.statTcp.textContent = String(summary.tcp_listening_sockets);
+        els.statUdp.textContent = String(summary.udp_listening_sockets);
+      }
+
+      function renderTable() {
+        var rows = filteredRows();
+        els.portsBody.textContent = "";
+
+        if (!rows.length) {
+          var tr = document.createElement("tr");
+          var td = document.createElement("td");
+          td.colSpan = 11;
+          td.className = "empty";
+          if (state.loading && !state.ports.length) {
+            td.textContent = "Loading…";
+          } else if (state.error && !state.ports.length) {
+            td.textContent = "Unable to load listening sockets.";
+          } else if (state.ports.length) {
+            td.textContent = "No sockets match your search or filters.";
+          } else {
+            td.textContent = "No listening sockets reported.";
+          }
+          tr.appendChild(td);
+          els.portsBody.appendChild(tr);
+          return;
+        }
+
+        rows.forEach(function (row) {
+          var tr = document.createElement("tr");
+          var fav = isFavorite(row);
+          if (fav) tr.className = "fav-row";
+
+          var favTd = document.createElement("td");
+          favTd.className = "col-fav";
+          var heartBtn = document.createElement("button");
+          heartBtn.type = "button";
+          heartBtn.className = "heart-btn" + (fav ? " active" : "");
+          heartBtn.title = fav ? "Remove from favorites" : "Add to favorites";
+          heartBtn.setAttribute("aria-pressed", fav ? "true" : "false");
+          heartBtn.setAttribute("aria-label", heartBtn.title);
+          heartBtn.innerHTML = fav
+            ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>'
+            : '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" d="M12.1 8.64l-.1.1-.11-.11C10.14 6.6 7.16 6.2 5.3 7.95c-1.86 1.75-1.9 4.6-.14 6.4L12 21l6.84-6.64c1.76-1.8 1.72-4.65-.14-6.4-1.86-1.76-4.84-1.35-6.6.68z"/></svg>';
+          heartBtn.addEventListener("click", function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            toggleFavorite(row);
+          });
+          favTd.appendChild(heartBtn);
+          tr.appendChild(favTd);
+
+          var cells = [
+            { text: displayValue(row.port), className: "mono" },
+            { badge: row.protocol },
+            { text: displayValue(row.address), className: "mono" },
+            { text: displayValue(row.state), className: "mono" },
+            { text: displayValue(row.process_name) },
+            { text: displayValue(row.pid), className: "mono" },
+            { text: displayValue(row.executable), className: "mono path" },
+            { text: displayValue(row.service), className: "mono" },
+            { status: row.service_status },
+          ];
+
+          cells.forEach(function (cell) {
+            var td = document.createElement("td");
+            if (cell.badge) {
+              var badge = document.createElement("span");
+              badge.className = "badge " + (cell.badge === "udp" ? "udp" : "tcp");
+              badge.textContent = String(cell.badge).toUpperCase();
+              td.appendChild(badge);
+            } else if (cell.status !== undefined) {
+              var pill = document.createElement("span");
+              var cls = statusClass(cell.status);
+              pill.className = "status-pill" + (cls ? " " + cls : "");
+              pill.textContent = displayValue(cell.status);
+              td.appendChild(pill);
+            } else {
+              td.textContent = cell.text;
+              if (cell.className) td.className = cell.className;
+            }
+            tr.appendChild(td);
+          });
+
+          var actTd = document.createElement("td");
+          var actions = document.createElement("div");
+          actions.className = "actions";
+          if (hasUnit(row) && !isProtectedUnit(row.service)) {
+            appendServiceActions(actions, row.service, row.service_status);
+          } else if (canKillRow(row)) {
+            // Includes user@*.service apps (e.g. stuck daphne) — kill PID, not the session
+            appendKillAction(actions, row);
+          } else if (hasUnit(row) && isHardProtectedUnit(row.service)) {
+            var mutedProt = document.createElement("span");
+            mutedProt.className = "muted";
+            mutedProt.textContent = "protected";
+            actions.appendChild(mutedProt);
+          } else {
+            var muted = document.createElement("span");
+            muted.className = "muted";
+            muted.textContent = "—";
+            actions.appendChild(muted);
+          }
+          actTd.appendChild(actions);
+          tr.appendChild(actTd);
+
+          els.portsBody.appendChild(tr);
+        });
+      }
+
+      function syncChipStyles() {
+        els.chipTcp.classList.toggle("active", els.filterTcp.checked);
+        els.chipUdp.classList.toggle("active", els.filterUdp.checked);
+      }
+
+      function setLoading(loading) {
+        state.loading = loading;
+        els.refreshBtn.disabled = loading;
+        if (loading) setStatus("loading", "Refreshing…");
+      }
+
+      async function fetchJson(url, options) {
+        var opts = options || {};
+        var controller = null;
+        var timer = null;
+        if (opts.timeoutMs && typeof AbortController !== "undefined") {
+          controller = new AbortController();
+          timer = setTimeout(function () { controller.abort(); }, opts.timeoutMs);
+        }
+        try {
+          var res = await fetch(url, {
+            method: opts.method || "GET",
+            credentials: "same-origin",
+            signal: controller ? controller.signal : undefined,
+            headers: Object.assign(
+              { Accept: "application/json" },
+              opts.body ? { "Content-Type": "application/json" } : {},
+              opts.headers || {}
+            ),
+            body: opts.body ? JSON.stringify(opts.body) : undefined,
+          });
+          if (!res.ok) {
+            var detail = "Request failed (" + res.status + ").";
+            try {
+              var body = await res.json();
+              if (body && body.detail) {
+                detail = Array.isArray(body.detail)
+                  ? body.detail.map(function (d) { return d.msg || JSON.stringify(d); }).join("; ")
+                  : String(body.detail);
+              }
+            } catch (e) { /* ignore */ }
+            var err = new Error(detail);
+            err.status = res.status;
+            throw err;
+          }
+          if (res.status === 204) return null;
+          return res.json();
+        } catch (fetchErr) {
+          if (fetchErr && fetchErr.name === "AbortError") {
+            throw new Error("Request timed out.");
+          }
+          throw fetchErr;
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      }
+
+      async function runPendingAction() {
+        var action = state.pendingAction;
+        if (!action || state.actionBusy) return;
+        if (els.confirmInput.value !== action.expected) return;
+
+        state.actionBusy = true;
+        els.confirmOk.disabled = true;
+        els.confirmCancel.disabled = true;
+        els.confirmOk.textContent = "Working…";
+
+        try {
+          if (action.kind === "stop") {
+            rememberService(action.unit);
+            await fetchJson("/api/service/stop", {
+              method: "POST",
+              body: { unit: action.unit, confirm: action.expected },
+            });
+            showOk("Stopped " + action.unit + " — it stays on the Services tab so you can Start it again.");
+          } else if (action.kind === "start") {
+            rememberService(action.unit);
+            await fetchJson("/api/service/start", {
+              method: "POST",
+              body: { unit: action.unit, confirm: action.expected },
+            });
+            showOk("Started " + action.unit);
+          } else if (action.kind === "restart") {
+            rememberService(action.unit);
+            await fetchJson("/api/service/restart", {
+              method: "POST",
+              body: { unit: action.unit, confirm: action.expected },
+            });
+            showOk("Restarted " + action.unit);
+          } else if (action.kind === "kill") {
+            await fetchJson("/api/process/kill", {
+              method: "POST",
+              body: {
+                pid: action.pid,
+                confirm: action.expected,
+                force: !!action.force,
+              },
+            });
+            showOk((action.force ? "Force-killed" : "Killed") + " PID " + action.pid);
+          } else if (action.kind === "docker") {
+            await fetchJson("/api/docker/" + action.action, {
+              method: "POST",
+              body: { target: action.target, confirm: action.expected },
+            });
+            showOk("Docker " + action.action + " " + action.target);
+          } else if (action.kind === "pm2") {
+            await fetchJson("/api/pm2/" + action.action, {
+              method: "POST",
+              body: { target: action.target, confirm: action.expected },
+            });
+            showOk("PM2 " + action.action + " " + action.target);
+          }
+          closeModal();
+          await refresh();
+        } catch (err) {
+          showError(err.message || "Action failed.");
+          closeModal();
+        } finally {
+          state.actionBusy = false;
+          els.confirmCancel.disabled = false;
+        }
+      }
+
+      async function refresh() {
+        if (state.loading) return;
+        setLoading(true);
+        showError("");
+
+        try {
+          var portsData = await fetchJson("/api/ports", { timeoutMs: 15000 });
+          state.ports = Array.isArray(portsData.ports) ? portsData.ports : [];
+          state.summary = portsData.summary || null;
+          state.error = null;
+          rememberServicesFromPorts();
+
+          // Paint ports immediately so Refresh is not stuck behind Docker/PM2.
+          renderSummary(state.summary);
+          renderActive();
+          els.lastUpdated.textContent = formatTs(portsData.timestamp);
+          setStatus("ok", "Up to date");
+          setLoading(false);
+
+          if (portsData.warnings && portsData.warnings.length) {
+            showError(portsData.warnings.join(" "), true);
+          }
+
+          try {
+            var catalog = await fetchJson("/api/services/catalog", { timeoutMs: 10000 });
+            var nextCatalog = {};
+            (catalog.services || []).forEach(function (item) {
+              if (item && item.unit) {
+                nextCatalog[item.unit] = item.status || "unavailable";
+                if ((item.status || "") !== "active") rememberService(item.unit);
+              }
+            });
+            state.catalogServices = nextCatalog;
+          } catch (catalogErr) {
+            /* keep previous catalog */
+          }
+
+          var knownUnits = Object.keys(state.knownServices);
+          if (knownUnits.length) {
+            try {
+              var svcData = await fetchJson("/api/services/status", {
+                method: "POST",
+                body: { units: knownUnits },
+                timeoutMs: 10000,
+              });
+              var nextStatus = {};
+              (svcData.services || []).forEach(function (item) {
+                if (item && item.unit) nextStatus[item.unit] = item.status || "unavailable";
+              });
+              state.serviceStatus = nextStatus;
+            } catch (svcErr) {
+              /* keep previous statuses */
+            }
+          }
+
+          var runtimeResults = await Promise.all([
+            fetchJson("/api/docker", { timeoutMs: 12000 }).catch(function (dockerErr) {
+              return {
+                containers: [],
+                error: (dockerErr && dockerErr.message) || "Docker unavailable.",
+              };
+            }),
+            fetchJson("/api/pm2", { timeoutMs: 12000 }).catch(function (pm2Err) {
+              return {
+                processes: [],
+                error: (pm2Err && pm2Err.message) || "PM2 unavailable.",
+                user: null,
+              };
+            }),
+            fetchJson("/api/system", { timeoutMs: 8000 }).catch(function () {
+              return null;
+            }),
+          ]);
+
+          var dockerData = runtimeResults[0] || {};
+          state.docker = Array.isArray(dockerData.containers) ? dockerData.containers : [];
+          state.dockerError = dockerData.error || null;
+
+          var pm2Data = runtimeResults[1] || {};
+          state.pm2 = Array.isArray(pm2Data.processes) ? pm2Data.processes : [];
+          state.pm2Error = pm2Data.error || null;
+          state.pm2User = pm2Data.user || null;
+
+          var sys = runtimeResults[2];
+          if (sys) {
+            els.systemBar.hidden = false;
+            els.sysHost.textContent = sys.hostname || "—";
+            els.sysUptime.textContent = formatUptime(sys.uptime_seconds);
+            els.sysLoad.textContent = Array.isArray(sys.loadavg)
+              ? sys.loadavg.map(function (n) { return Number(n).toFixed(2); }).join(", ")
+              : "—";
+            els.sysMem.textContent = formatMem(sys.mem_available_kb);
+          }
+
+          renderActive();
+        } catch (err) {
+          state.error = err.message || "Failed to load data.";
+          setStatus("err", "Error");
+          showError(state.error);
+          renderActive();
+          setLoading(false);
+        }
+      }
+
+      els.searchInput.addEventListener("input", function () { renderActive(); });
+      els.filterTcp.addEventListener("change", function () {
+        syncChipStyles();
+        renderActive();
+      });
+      els.filterUdp.addEventListener("change", function () {
+        syncChipStyles();
+        renderActive();
+      });
+      els.clearBtn.addEventListener("click", function () {
+        els.searchInput.value = "";
+        els.filterTcp.checked = true;
+        els.filterUdp.checked = true;
+        syncChipStyles();
+        renderActive();
+        els.searchInput.focus();
+      });
+      els.refreshBtn.addEventListener("click", function () { refresh(); });
+      els.tabPorts.addEventListener("click", function () { setTab("ports"); });
+      els.tabServices.addEventListener("click", function () { setTab("systemd"); });
+      els.tabDocker.addEventListener("click", function () { setTab("docker"); });
+      els.tabPm2.addEventListener("click", function () { setTab("pm2"); });
+      function trackServiceFromInput() {
+        var unit = (els.trackServiceInput.value || "").trim();
+        if (!UNIT_RE.test(unit)) {
+          showError("Enter a valid unit name ending in .service (example: postgresql@16-main.service).");
+          return;
+        }
+        rememberService(unit);
+        els.trackServiceInput.value = "";
+        showOk("Tracking " + unit);
+        refresh();
+      }
+      els.trackServiceBtn.addEventListener("click", trackServiceFromInput);
+      els.trackServiceInput.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          trackServiceFromInput();
+        }
+      });
+      els.confirmCancel.addEventListener("click", function () { closeModal(); });
+      els.confirmOk.addEventListener("click", function () { runPendingAction(); });
+      els.confirmInput.addEventListener("input", syncConfirmEnabled);
+      els.confirmInput.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          runPendingAction();
+        } else if (ev.key === "Escape") {
+          closeModal();
+        }
+      });
+      els.confirmModal.addEventListener("click", function (ev) {
+        if (ev.target === els.confirmModal) closeModal();
+      });
+      els.logsClose.addEventListener("click", closeLogs);
+      els.logsClear.addEventListener("click", function () {
+        els.logsView.textContent = "";
+      });
+      els.logsModal.addEventListener("click", function (ev) {
+        if (ev.target === els.logsModal) closeLogs();
+      });
+
+      syncChipStyles();
+      initThemeControls();
+      setTab("ports");
+      refresh();
+    })();
+  </script>
+</body>
+</html>

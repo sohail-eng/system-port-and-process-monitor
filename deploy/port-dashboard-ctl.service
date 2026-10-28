@@ -1,0 +1,40 @@
+[Unit]
+Description=System Port & Process Monitor control helper
+Documentation=file:///opt/port-dashboard/README.md
+After=network-online.target
+Wants=network-online.target
+Before=port-dashboard.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/opt/port-dashboard/venv/bin/python /opt/port-dashboard/deploy/ctl_server.py
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=port-dashboard
+RuntimeDirectoryMode=0750
+
+# Helper must manage units, docker, pm2, and signal processes.
+NoNewPrivileges=true
+# read-only home: PM2 (~/.pm2) and Docker Desktop socket may live under /home
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+# MUST stay false: PM2/Node (V8) needs mprotect; MemoryDenyWriteExecute
+# causes "reservation_.SetPermissions" fatal errors when listing/controlling apps.
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+# PM2 may need to update its home when starting/stopping apps
+ReadWritePaths=/home/dev/.pm2
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=port-dashboard-ctl
+
+[Install]
+WantedBy=multi-user.target

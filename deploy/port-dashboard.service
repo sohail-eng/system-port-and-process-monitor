@@ -1,0 +1,45 @@
+[Unit]
+Description=System Port & Process Monitor API
+Documentation=file:///opt/port-dashboard/README.md
+After=network-online.target port-dashboard-ctl.service
+Wants=network-online.target port-dashboard-ctl.service
+
+[Service]
+Type=simple
+User=port-dashboard
+Group=port-dashboard
+WorkingDirectory=/opt/port-dashboard
+ExecStart=/opt/port-dashboard/venv/bin/uvicorn backend.app:app --host 127.0.0.1 --port 8009 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=3
+
+# Process inspection for sockets owned by other users.
+# Destructive actions go through port-dashboard-ctl.service via a Unix socket.
+AmbientCapabilities=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+NoNewPrivileges=true
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+ReadOnlyPaths=/opt/port-dashboard
+ReadOnlyPaths=/proc
+ReadOnlyPaths=/sys/fs/cgroup
+# Control socket directory created by port-dashboard-ctl.service
+ReadWritePaths=/run/port-dashboard
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=port-dashboard
+
+[Install]
+WantedBy=multi-user.target

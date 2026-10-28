@@ -1,0 +1,3 @@
+# Allow the port-dashboard service user to run only the guarded control helper.
+# Installed to /etc/sudoers.d/port-dashboard by deploy/install.sh
+port-dashboard ALL=(root) NOPASSWD: /usr/local/sbin/port-dashboard-ctl
